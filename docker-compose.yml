@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # 0. POSTGRESQL - NO se expone (Seguridad)
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-tpi
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    # ports:  <-- BORRADO. Solo accesible por los microservicios internamente
+    #   - "5432:5432" 
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - tpi-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 1. KEYCLOAK - SÍ se expone (Necesitas loguearte desde el navegador)
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak-tpi
+    command: start-dev
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+    ports:
+      - "8888:8080" # NECESARIO para entrar a la consola y obtener tokens
+    networks:
+      - tpi-network
+
+  # 2. API GATEWAY - SÍ se expone (Es la entrada única)
+  api-gateway:
+    container_name: api-gateway
+    build: ./apigateway-service 
+    ports:
+      - "9000:9000" # NECESARIO: Aquí es donde pegarás con Postman/Frontend
+    environment:
+      - SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/tpi-2025-backend
+    networks:
+      - tpi-network
+    depends_on:
+      - keycloak
+
+  # 3. SOLICITUDES SERVICE - NO se expone
+  solicitudes-service:
+    container_name: solicitudes-service
+    build: ./solicitudes-service
+    # ports: <-- BORRADO. El Gateway lo contacta internamente
+    #   - "8080:8080" 
+    environment:
+      - SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/tpi-2025-backend
+      # Fíjate que usa "postgres" como host, esto funciona perfecto internamente
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/solicitudes_db
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+      - DDL_AUTO=update
+    networks:
+      - tpi-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
+  # 4. RUTAS SERVICE - NO se expone
+  rutas-service:
+    container_name: rutas-service
+    build: ./rutas-service
+    # ports: <-- BORRADO
+    #   - "8082:8082"
+    environment:
+      - SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/tpi-2025-backend
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/rutas_db
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+      - DDL_AUTO=update
+    networks:
+      - tpi-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
+  # 5. TARIFAS SERVICE - NO se expone
+  tarifas-service:
+    container_name: tarifas-service
+    build: ./tarifas-service
+    # ports: <-- BORRADO
+    #   - "8083:8083"
+    environment:
+      - SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/tpi-2025-backend
+      - DATABASE_URL=jdbc:postgresql://postgres:5432/tarifas_db
+      - DATABASE_USERNAME=postgres
+      - DATABASE_PASSWORD=postgres
+      - DDL_AUTO=update
+    networks:
+      - tpi-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
+  # 6. DISTANCIAS SERVICE - NO se expone
+  distancias-service:
+    container_name: distancias-service
+    build: ./distancias-service
+    # ports: <-- BORRADO
+    #   - "8081:8081"
+    environment:
+      - SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI=http://keycloak:8080/realms/tpi-2025-backend
+    networks:
+      - tpi-network
+    depends_on:
+      - keycloak
+
+networks:
+  tpi-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
